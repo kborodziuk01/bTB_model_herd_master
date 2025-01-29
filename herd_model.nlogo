@@ -115,8 +115,14 @@ to write_inf_map
 
 end
 
+
+
+
+
+
+
 to setup
-  ;no-display
+  no-display
   ca ;clear all
 
 
@@ -916,7 +922,7 @@ num_cows
 num_cows
 200
 600
-516.0
+544.0
 1
 1
 NIL
@@ -1072,7 +1078,7 @@ skin_test_SE
 skin_test_SE
 50
 100
-79.6
+83.2
 0.1
 1
 NIL
