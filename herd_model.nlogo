@@ -17,7 +17,7 @@ globals [
   right_milk
   left_robots
   right_robots
-  max_btb_concentration
+  max_Ec
   total_concentration
   days_since_test
   dry_box
@@ -26,11 +26,21 @@ globals [
   r-mov
   l_food_place
   r_food_place
-
+  exposed_cows
+  infectious_cows
+  h_inf
   tested_count
   positive_count
   negative_count
   run-test-list
+  t
+
+  ;INFECTION Parameters
+  mu
+  phi
+  beta_cc
+  inf_patches
+
 
  ]
 
@@ -47,11 +57,13 @@ cows-own [
   time_to_milk
   incubation
   time_since_infection
-  age]
+  age
+  time_since_exposed
+  ]
 
 patches-own [
   food_amount
-  btb_concentration
+  Ec
   inf_before?]
 
 
@@ -60,6 +72,48 @@ robots-own [
   max-uses-ph
   used-this-hour
   time_since_clean]
+
+
+;#####################
+;###  Report setup ###
+;#####################
+
+to write_rep
+
+  file-open "my-file-in.txt"
+  file-write (word
+    "dd_" duration_dry
+    "_te_"  time_exposed
+    "_nif_"  num_infected_init
+    "_ny_" num_young
+    "_HT_" hunger_treshold
+    "_fph_" food_per_h
+    "_mnt_" milking_need_tresh
+    "_ffm_" food_from_milker
+    "_hph_" hunger_per_h
+
+    run-test-list)
+  file-close
+end
+
+to write_inf_map
+
+  file-open "map list.txt"
+  file-write (word
+    "dd_" duration_dry
+    "_te_"  time_exposed
+    "_nif_"  num_infected_init
+    "_ny_" num_young
+    "_HT_" hunger_treshold
+    "_fph_" food_per_h
+    "_mnt_" milking_need_tresh
+    "_ffm_" food_from_milker
+    "_hph_" hunger_per_h
+
+    inf_patches)
+  file-close
+
+end
 
 to setup
   ;no-display
@@ -70,26 +124,27 @@ to setup
   ;####  Time Setup  ###
   ;#####################
 
-  set current-time time:create "2015-05-24 00:00:00" ; start date
+  set current-time time:create "2018-01-01 00:00:00" ; start date
   set current-hour 0
+  set h_inf  time_exposed * 24
 
-  set events-list read-event-csv "events2.csv"
+  set events-list read-event-csv "events2018-2024.csv"
 
   set current-event item 0 events-list
 
   set _1st_feed 7
   set _2nd_feed 18
 
-  set max_btb_concentration 60
 
-  set total_concentration 0
   set days_since_test 0
 
+  set t 0
 
 
   reset-ticks
 
   set run-test-list []
+  set inf_patches []
 
 
   ;#############################
@@ -126,11 +181,6 @@ to setup
   ask mid_patch [ set pcolor gray]
   ask l_food_patches [set pcolor red] ; color the vertical line red for visual clarity
   ask r_food_patches [set pcolor red]
-
-
-
-
-
 
 
 
@@ -180,15 +230,15 @@ to setup
 
 
   spawn_cows num_cows - num_young false 2000
-  spawn_cows num_young true 360
+  spawn_cows num_young true 720
 
 
-  ask n-of num_infected_init cows[
-    get_exposed
-  ]
+
 
   set not-dry-cows cows with [dry? = false]
 
+
+  init_infect
 
 
   set tested_count 0
@@ -196,7 +246,25 @@ to setup
   set negative_count 0
 
 
+
+
+  ;#######################
+  ;### Infection setup ###
+  ;#######################
+
+
+  set mu 0.0001625
+
+  set phi 2
+  set beta_cc 4.208333333333333e-07
+
+
 end
+
+
+
+
+
 
 
 to spawn_cows [ num_cows_create age-random? age-var]
@@ -237,6 +305,246 @@ end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
+;######################################
+;### Infection supporting functions ###
+;######################################
+
+
+to calc_decay
+
+  let Ic count cows-here with [status = "Infectious"]
+
+  ifelse Ec = 0 and Ic = 0
+  []
+  [set Ec Ec + (phi * Ic) - (mu * Ec) ]
+
+end
+
+to calc_prob
+  let exponent 0
+  let Nc count turtles-on dry_box
+
+  ifelse dry? = true
+  [
+    set exponent  ((beta_cc * (Ec / Nc))) * -1
+
+  ]
+  [
+      set exponent  (beta_cc * Ec) * -1
+    ]
+
+
+
+  let exponent2 exp exponent
+  let probability 1 - exponent
+
+  ;if c > 0.001[ show c]
+
+  if random-float 1 < probability
+  [infect]
+
+end
+
+to infect
+
+  set status "Exposed"
+  set color yellow
+  set time_since_exposed 0
+  set inf_patches  lput patch-here inf_patches
+
+end
+
+to init_infect
+
+  ask n-of  num_infected_init cows [
+
+    set color yellow
+    set status  "Exposed"]
+
+
+
+end
+
+to progress_inf
+
+  ask exposed_cows[
+
+    set time_since_exposed time_since_exposed + 1
+
+   if time_since_exposed >= h_inf[
+    set color red
+      set status "Infectious"]]
+
+
+
+
+end
+
+
+to dry_infect
+
+  let dry_turtles turtles-on dry_box
+
+
+  let Ic count dry_turtles with [status = "Infectious"]
+
+  let _Ec [Ec] of one-of dry_box
+
+
+
+
+  let a phi * Ic
+  let b mu * _Ec
+  let c  a - b
+  let d _Ec + c
+
+
+  ask dry_box[ set Ec d ]
+
+end
+
+;###################
+;###   Main Go   ###
+;###################
+
+
+to go
+
+
+  ;########################
+  ;####  Hourly Events  ###
+  ;########################
+
+
+  set current-time time:plus current-time 1 "hour"
+  set current-hour current-hour + 1
+
+  ask not-dry-cows[
+
+
+    set hunger hunger  + hunger_per_h
+    if random 100 < 33
+    [cow_move]
+    cow_milking
+    cow_food_stuff
+
+  ]
+
+
+  ask robots[
+    set max-uses-ph 10]
+
+  if time:is-after? current-time (first current-event) [
+    ; Perform the action for this event
+    ;show (word "event in: " item 1 current-event " event out: " item 2 current-event)
+    perform-movement-event(current-event)
+
+    ; Remove the current event and move to the next one
+    set events-list but-first events-list
+    set current-event item 0 events-list
+
+  ]
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+  ;;;;;;;;;;  comented out for speed   ;;;;
+  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;  ask patches[
+;    set pcolor scale-color pink Ec 0 2000]
+;  ask l_food_patches [set pcolor red] ; color the vertical line red for visual clarity
+;  ask r_food_patches [set pcolor red]
+
+
+  if current-hour = _1st_feed
+  [feed
+
+  ]
+
+
+  if current-hour = _2nd_feed
+  [feed
+  ]
+
+
+
+
+  ;Do last each hour before daily tasks.
+
+  let non_dry_patch patches who-are-not dry_box
+
+  ask non_dry_patch [ calc_decay]
+  ask cows with [status = "Healthy"][ calc_prob]
+  dry_infect
+
+
+  set exposed_cows cows with [status = "Exposed"]
+  progress_inf
+  set infectious_cows cows with [status = "Infectious"]
+
+
+
+
+  ;#######################
+  ;####  Daily Tasks   ###
+  ;#######################
+
+  if current-hour = 24 [
+    set days_since_test days_since_test + 1
+    set current-hour 0
+
+    if Dry_box_on[
+      ask cows[dry]]
+
+
+    set not-dry-cows cows with [dry? = false]
+
+
+    ask cows [
+
+      set age age + 1 ]
+
+    clean_milker
+      tick
+
+
+
+    if ticks >= 2423 [ stop]
+
+
+    if tested_count > 0[
+
+      set tested_count 0
+      set positive_count 0
+      set negative_count 0
+
+    ]
+
+
+  ]
+
+
+  ;##########################
+  ;####  Every 6 months   ###
+  ;##########################
+
+
+  if days_since_test >= 182
+  [
+    skin_test
+    set days_since_test 0
+
+  ]
+end
+
+
+to reset_profile
+    profiler:stop          ;; stop profiling
+    print profiler:report  ;; view the results
+    profiler:reset
+
+end
+
 
 to dry
 
@@ -248,7 +556,7 @@ to dry
 
     move-to one-of dry_box
     set dry? true
-    set time_to_milk 60
+    set time_to_milk duration_dry
 
   ]
 
@@ -274,237 +582,8 @@ to dry
 end
 
 
-to get_infected
 
-  if btb_concentration > 0[
-  let chance_to_infect max_chance_infect * ((btb_concentration / max_btb_concentration) ^ growth)
-  if chance_to_infect > 0
-  [
-    if random-float max_chance_infect < chance_to_infect
-    [
-      get_exposed
 
-      ask neighbors[
-        set btb_concentration btb_concentration -  random inhale_factor]
-    ]
-  ]]
-end
-
-
-
-
-
-to go
-
-
-  ;########################
-  ;####  Hourly Events  ###
-  ;########################
-
-
-  let inf_patch patches with [btb_concentration > 0]
-  ask inf_patch [ set btb_concentration btb_concentration -  btb_decay
-
-    if inf_before? = True and btb_concentration < min_buildup[
-      set btb_concentration min_buildup]
-    if btb_concentration < 0 [set btb_concentration 0]
-
-
-  ]
-
-
-
-  set current-time time:plus current-time 1 "hour"
-  set current-hour current-hour + 1
-
-
-
-
-
-
-
-  ask not-dry-cows[
-
-
-    set hunger hunger  + hunger_per_h
-    if random 100 > 33
-    [cow_move]
-    cow_milking
-    cow_food_stuff
-
-    if status = "Infectious"
-    [spread_tb]
-    if status = "Healthy"
-    [get_infected]
-  ]
-
-
-;  let infected_cows cows with [status = "Infectious"]
-;  ask infected_cows[
-;    spread_tb]
-
-
-
-  ask robots[
-    set max-uses-ph 10]
-
-
-  if time:is-after? current-time (first current-event) [
-    ; Perform the action for this event
-    ;show (word "event in: " item 1 current-event " event out: " item 2 current-event)
-    perform-movement-event(current-event)
-
-    ; Remove the current event and move to the next one
-    set events-list but-first events-list
-    set current-event item 0 events-list
-
-  ]
-
-
-
-
-
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-  ;;;;;;;;;;  comented out for speed   ;;;;
-  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-  ask inf_patch[
-    set pcolor scale-color pink btb_concentration 0 100]
-  ;ask l_food_patches [set pcolor red] ; color the vertical line red for visual clarity
-  ;ask r_food_patches [set pcolor red]
-
-
-  if current-hour = _1st_feed
-  [feed
-
-  ]
-
-
-  if current-hour = _2nd_feed
-  [feed
-  ]
-
-
-
-
-  ;Do last each hour before daily tasks.
-
-
-  ;set total_concentration 0
-  ;ask patches
- ; [set total_concentration total_concentration + btb_concentration]
-
-
-
-  ;#######################
-  ;####  Daily Tasks   ###
-  ;#######################
-
-  if current-hour = 24 [
-    set days_since_test days_since_test + 1
-    set current-hour 0
-
-    if Dry_box_on[
-      ask cows[dry]]
-
-
-      set not-dry-cows cows with [dry? = false]
-
-    ask not-dry-cows [
-
-      infection_progress]
-
-    ask cows [
-
-      set age age + 1 ]
-
-    clean_milker
-      tick
-
-    let e_cow count cows with [status = "Exposed"]
-    let i_cow count  cows with [status = "Infectious"]
-
-
-    ;if e_cow = 0 and i_cow = 0[stop]
-    if ticks >= 2000 [ stop]
-
-
-    if tested_count > 0[
-
-      set tested_count 0
-      set positive_count 0
-      set negative_count 0
-
-
-
-    ]
-
-
-  ]
-
-
-  ;#########################
-  ;####  Every 6 moths   ###
-  ;#########################
-
-
-  if days_since_test >= 182
-  [
-    skin_test
-    set days_since_test 0
-
-
-    ask n-of (random (count patches) / 2)  patches[
-
-     set btb_concentration 0
-     set inf_before? False
-
-
-
-    ]
-
-  ]
-end
-
-
-to reset_profile
-    profiler:stop          ;; stop profiling
-    print profiler:report  ;; view the results
-    profiler:reset
-
-end
-
-
-
-to spread_tb
-
-  ask neighbors[ set btb_concentration btb_concentration + random btb_shed
-    if inf_before? = False[
-      set inf_before? True]
-    if btb_concentration > max_btb_concentration[
-      set btb_concentration max_btb_concentration]
-
-
-  ]
-
-
-
-end
-
-
-to get_exposed
-
-
-  set status "Exposed"
-  set color yellow
-  set incubation int random-normal 97 4
-  set time_since_infection 0
-
-
-
-end
 
 to clean_milker
 
@@ -520,8 +599,8 @@ to clean_milker
       if  time_since_clean > 7
       [
 
-        set btb_concentration 0
-        ask neighbors [ set btb_concentration 0]
+        set Ec 0
+        ask neighbors [ set Ec 0]
 
         ;clean
 
@@ -529,7 +608,18 @@ to clean_milker
       ]
 
 
-  ]]
+  ]
+
+
+    ask l_food_place[
+      set Ec 10
+    ]
+
+    ask r_food_place[
+      set Ec 10
+    ]
+
+  ]
 
   if clean_frequency = "1 Month"
   [
@@ -540,8 +630,8 @@ to clean_milker
       if  time_since_clean > 30
       [
 
-        set btb_concentration 0
-        ask neighbors [ set btb_concentration 0]
+        set Ec 0
+        ask neighbors [ set Ec 0]
 
         ;clean
 
@@ -549,7 +639,15 @@ to clean_milker
       ]
 
 
-  ]
+    ]
+
+    ask l_food_place[
+      set Ec 10
+    ]
+    ask r_food_place[
+      set Ec 10
+    ]
+
 
 
 
@@ -565,8 +663,8 @@ to clean_milker
       if  time_since_clean > 1
       [
 
-        set btb_concentration 0
-        ask neighbors [ set btb_concentration 0]
+        set Ec 0
+        ask neighbors [ set Ec 0]
 
         ;clean
 
@@ -579,20 +677,6 @@ to clean_milker
 
 end
 
-
-to infection_progress
-
-
-  if status = "Exposed"[
-    set incubation incubation - 1
-
-    if incubation <= 0
-    [set status "Infectious"
-      set color red]
-  ]
-
-  set time_since_infection time_since_infection + 1
-end
 
 to feed
 
@@ -607,38 +691,9 @@ to feed
     if food_amount > 100[set food_amount 100]
   ]
 
-
-  if clean_milk
-
-  [
-
-    ask l_food_place[
-
-      set btb_concentration 0]
-
-    ask l_food_place[
-
-      set btb_concentration 0]
-
-
-
-
-  ]
-
-
-
-
-
-
-
-
-
-
 end
 
 to cow_milking
-
-
 
     set milking_need milking_need + ( 8 + random 8)
 
@@ -655,11 +710,7 @@ to cow_milking
             set max-uses-ph max-uses-ph - 1]
           set milking_need 0
           set hunger hunger - food_from_milker
-          if status = "Infectious"[
-            spread_tb]
-
-
-          move-to one-of l-mov
+          ;move-to one-of l-mov
 
         ]
       ]
@@ -671,9 +722,7 @@ to cow_milking
             set max-uses-ph max-uses-ph - 1]
           set milking_need 0
           set hunger hunger - food_from_milker
-          if status = "Infectious"[
-            spread_tb]
-          move-to one-of r-mov
+          ;move-to one-of r-mov
         ]
       ]
 
@@ -686,13 +735,6 @@ to cow_move
   ifelse side = "left"
   [move-to one-of l-mov]
   [move-to one-of r-mov]
-
-
-
-
-
-
-
 
 
 end
@@ -715,9 +757,9 @@ to cow_food_stuff
 
     set hunger hunger - food_per_h
     ask p [ set food_amount food_amount - 40]
-    ifelse side = "left"
-    [move-to one-of l-mov]
-    [move-to one-of r-mov ]
+;    ifelse side = "left"
+;    [move-to one-of l-mov]
+;    [move-to one-of r-mov ]
 
   ]
 
@@ -734,10 +776,8 @@ end
 to skin_test
 
 
-  let total_test cows with [age >= 365]
+  let total_test cows with [age >= 360]
   set tested_count count total_test
-
-
 
   ask total_test
   [
@@ -749,8 +789,6 @@ to skin_test
     ]
 
 
-
-
   ]
 
 
@@ -759,31 +797,11 @@ to skin_test
 
   set run-test-list lput (list ticks tested_count negative_count positive_count) run-test-list
 
-
-
-
-
-
-;  ask cows with [status !="Healthy" and age >= 365][
-;
-;
-;    if random-float 100 < skin_test_SE[
-;
-;      die
-;
-;    ]
-;
-;
-;  ]
-
 end
 
 
-
-
-
 to perform-movement-event [event-data]
-  ; Do something based on the event-data
+
   let e_in item 1 event-data
   let e_out item 2 event-data
 
@@ -802,22 +820,6 @@ to perform-movement-event [event-data]
   if e_out > 0 [kill_cows e_out]
 
 end
-
-to export-data
-  ;; Open the file and write all collected data at once
-  file-open "./test-results/run-data.csv"
-
-  ;; Write the header row
-  file-print "ticks,mean-speed,total-distance"
-
-  ;; Write each entry in `run-data` to the file
-  foreach run-test-list [
-    entry -> file-print (word first entry "," item 1 entry "," last entry)
-  ]
-
-  file-close
-end
-
 
 
 to-report read-event-csv [filename]
@@ -914,7 +916,7 @@ num_cows
 num_cows
 200
 600
-529.0
+516.0
 1
 1
 NIL
@@ -946,7 +948,7 @@ num_infected_init
 num_infected_init
 0
 50
-9.0
+5.0
 1
 1
 NIL
@@ -1006,7 +1008,7 @@ food_from_milker
 food_from_milker
 0
 25
-16.0
+17.0
 1
 1
 NIL
@@ -1021,67 +1023,7 @@ hunger_per_h
 hunger_per_h
 0
 50
-15.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-279
-10
-390
-43
-btb_shed
-btb_shed
-0
-15
-11.0
-1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-277
-50
-369
-83
-btb_decay
-btb_decay
-0
-2
-0.6
-0.1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-0
-557
-172
-590
-growth
-growth
-0
-8
-6.0
-0.1
-1
-NIL
-HORIZONTAL
-
-SLIDER
-0
-523
-172
-556
-max_chance_infect
-max_chance_infect
-0
-50
-44.0
+9.0
 1
 1
 NIL
@@ -1122,25 +1064,25 @@ NIL
 1
 
 SLIDER
-266
-373
-394
-406
+967
+298
+1095
+331
 skin_test_SE
 skin_test_SE
 50
 100
-81.9
+79.6
 0.1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-266
-336
-390
-369
+967
+261
+1091
+294
 Skin_test_SP
 Skin_test_SP
 99.99
@@ -1152,36 +1094,21 @@ NIL
 HORIZONTAL
 
 SWITCH
-271
-204
-385
-237
+967
+159
+1081
+192
 dry_box_on
 dry_box_on
 0
 1
 -1000
 
-SLIDER
-190
-523
-362
-556
-inhale_factor
-inhale_factor
-0
-10
-5.0
-1
-1
-NIL
-HORIZONTAL
-
 BUTTON
-1092
-372
-1190
-405
+965
+524
+1063
+557
 NIL
 reset_profile
 NIL
@@ -1195,10 +1122,10 @@ NIL
 1
 
 BUTTON
-1090
-426
-1205
-459
+964
+482
+1079
+515
 profiler
 setup\nprofiler:start\nrepeat 7200 [go]\nprofiler:stop          ;; stop profiling\nprint profiler:report  ;; view the results\nprofiler:reset \n
 NIL
@@ -1220,17 +1147,17 @@ num_young
 num_young
 0
 100
-30.0
+6.0
 1
 1
 NIL
 HORIZONTAL
 
 SWITCH
-963
-23
-1072
-56
+965
+72
+1074
+105
 clean_milk
 clean_milk
 1
@@ -1238,62 +1165,128 @@ clean_milk
 -1000
 
 CHOOSER
-963
-70
-1101
-115
+1111
+69
+1249
+114
 clean_frequency
 clean_frequency
 "1 Week" "1 Month" "Daily"
-0
+1
 
 SLIDER
-967
-155
-1139
-188
-min_buildup
-min_buildup
 0
+466
+172
+499
+duration_dry
+duration_dry
+0
+360
+60.0
 10
-5.0
+1
+NIL
+HORIZONTAL
+
+SLIDER
+0
+507
+172
+540
+time_exposed
+time_exposed
+1
+650
+46.0
 1
 1
 NIL
 HORIZONTAL
 
-MONITOR
-1040
-243
-1129
-288
+BUTTON
+1278
+280
+1360
+313
 NIL
-tested_count
-17
+write_rep
+NIL
 1
-11
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
 
-MONITOR
-1135
-244
-1237
-289
+BUTTON
+1277
+333
+1385
+366
 NIL
-negative_count
-17
+write_inf_map\n
+NIL
 1
-11
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
 
-MONITOR
-1242
-244
-1338
-289
-NIL
-positive_count
-17
+TEXTBOX
+1279
+20
+1506
+305
+Reporting Funtions.\n\nCan be used when the run has finished.\n\nwrite_rep - outputs a document with all skin test results from the run. each record has a label with run parameters as well as 9-10 result lists with following fields\n[total_tested, Negative,Positive] \n\nwrite_inf_map - outputs a document holiding all patches where cows got infected. each run produces a lable with run parameters as well as a list of patches. this can be imported to a inf_map testing tool to display a heatmap of the infection in the run
+12
+0.0
 1
-11
+
+TEXTBOX
+968
+426
+1118
+471
+Profiler - to test the execution speed of individual functions
+12
+0.0
+1
+
+TEXTBOX
+965
+224
+1115
+254
+Sensitivity and Specificity of the skin test
+12
+0.0
+1
+
+TEXTBOX
+966
+142
+1116
+160
+Separate the \"dry\" cows ?
+12
+0.0
+1
+
+TEXTBOX
+967
+16
+1117
+55
+Toggle to enable periodic cleaning of the whole barn. Used for testing, off by default
+10
+0.0
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
@@ -1642,64 +1635,102 @@ NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 <experiments>
-  <experiment name="big" repetitions="100" runMetricsEveryStep="false">
+  <experiment name="experiment" repetitions="20" runMetricsEveryStep="false">
     <setup>setup</setup>
     <go>go</go>
-    <metric>count cows with [status = "Exposed"]</metric>
-    <metric>count cows with [status = "Infectious"]</metric>
-    <metric>count cows</metric>
-    <metric>ticks</metric>
-    <steppedValueSet variable="btb_decay" first="0.7" step="0.1" last="0.8"/>
-    <steppedValueSet variable="growth" first="2.2" step="0.1" last="2.6"/>
-    <steppedValueSet variable="btb_shed" first="3" step="1" last="5"/>
-    <steppedValueSet variable="num_infected_init" first="2" step="1" last="4"/>
-  </experiment>
-  <experiment name="test1" repetitions="100" sequentialRunOrder="false" runMetricsEveryStep="false">
-    <setup>setup</setup>
-    <go>go</go>
-    <metric>count cows with [status = "Exposed"]</metric>
-    <metric>count cows with [status = "Infectious"]</metric>
-    <metric>count cows</metric>
-    <metric>ticks</metric>
-    <enumeratedValueSet variable="btb_decay">
-      <value value="0.8"/>
+    <postRun>write_rep
+write_inf_map</postRun>
+    <enumeratedValueSet variable="num_young">
+      <value value="6"/>
+      <value value="50"/>
     </enumeratedValueSet>
-    <enumeratedValueSet variable="btb_shed">
-      <value value="4"/>
+    <enumeratedValueSet variable="Skin_test_SP">
+      <value value="99.99"/>
     </enumeratedValueSet>
-  </experiment>
-  <experiment name="herd_res" repetitions="100" runMetricsEveryStep="true">
-    <setup>setup</setup>
-    <go>go</go>
-    <metric>count cows</metric>
-    <metric>tested_count</metric>
-    <metric>negative_count</metric>
-    <metric>positive_count</metric>
-    <steppedValueSet variable="btb_decay" first="0.7" step="0.1" last="0.9"/>
-    <steppedValueSet variable="growth" first="6" step="0.1" last="7"/>
-    <enumeratedValueSet variable="inhale_factor">
-      <value value="5"/>
+    <enumeratedValueSet variable="dry_box_on">
+      <value value="true"/>
     </enumeratedValueSet>
-    <steppedValueSet variable="btb_shed" first="3" step="1" last="4"/>
+    <enumeratedValueSet variable="clean_milk">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="clean_frequency">
+      <value value="&quot;1 Month&quot;"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="milking_need_tresh">
+      <value value="89"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="duration_dry">
+      <value value="60"/>
+      <value value="90"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="hunger_treshold">
+      <value value="80"/>
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="skin_test_SE">
+      <value value="79.6"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="food_per_h">
+      <value value="30"/>
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="food_from_milker">
+      <value value="10"/>
+      <value value="30"/>
+    </enumeratedValueSet>
     <enumeratedValueSet variable="num_infected_init">
+      <value value="5"/>
+      <value value="15"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="hunger_per_h">
       <value value="8"/>
+      <value value="12"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="time_exposed">
+      <value value="20"/>
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num_cows">
+      <value value="516"/>
     </enumeratedValueSet>
   </experiment>
-  <experiment name="console_exp" repetitions="20" runMetricsEveryStep="false">
+  <experiment name="experiment (copy)" repetitions="20" runMetricsEveryStep="false">
     <setup>setup</setup>
     <go>go</go>
-    <postRun>print (word  "sh_" btb_shed "_"  "nif_" num_infected_init "_" "de_" btb_decay "_"  "gr_" growth "_"  "inh_" inhale_factor "_"  "mci_" max_chance_infect run-test-list)</postRun>
-    <steppedValueSet variable="btb_decay" first="0.5" step="0.1" last="0.7"/>
-    <steppedValueSet variable="growth" first="6" step="0.2" last="7"/>
-    <enumeratedValueSet variable="inhale_factor">
+    <postRun>write_rep
+write_inf_map</postRun>
+    <enumeratedValueSet variable="milking_need_tresh">
+      <value value="50"/>
+      <value value="80"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="duration_dry">
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="hunger_treshold">
+      <value value="60"/>
+      <value value="80"/>
+      <value value="100"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="food_per_h">
+      <value value="30"/>
+      <value value="60"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="food_from_milker">
+      <value value="10"/>
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="num_infected_init">
       <value value="5"/>
+      <value value="15"/>
     </enumeratedValueSet>
-    <steppedValueSet variable="btb_shed" first="4" step="1" last="6"/>
-    <steppedValueSet variable="num_infected_init" first="3" step="1" last="5"/>
-    <enumeratedValueSet variable="max_chance_infect">
-      <value value="44"/>
+    <enumeratedValueSet variable="hunger_per_h">
+      <value value="14"/>
+      <value value="16"/>
     </enumeratedValueSet>
-    <steppedValueSet variable="min_buildup" first="4" step="1" last="6"/>
+    <enumeratedValueSet variable="time_exposed">
+      <value value="20"/>
+      <value value="60"/>
+    </enumeratedValueSet>
   </experiment>
 </experiments>
 @#$#@#$#@
